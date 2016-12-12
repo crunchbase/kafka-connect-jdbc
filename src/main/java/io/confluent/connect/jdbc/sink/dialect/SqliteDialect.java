@@ -53,9 +53,9 @@ public class SqliteDialect extends DbDialect {
   }
 
   @Override
-  protected String getSqlType(String schemaName, Map<String, String> parameters, Schema.Type type) {
-    if (schemaName != null) {
-      switch (schemaName) {
+  protected String getSqlType(SinkRecordField f) {
+    if (f.schemaName() != null) {
+      switch (f.schemaName()) {
         case Decimal.LOGICAL_NAME:
         case Date.LOGICAL_NAME:
         case Time.LOGICAL_NAME:
@@ -63,7 +63,7 @@ public class SqliteDialect extends DbDialect {
           return "NUMERIC";
       }
     }
-    switch (type) {
+    switch (f.schemaType()) {
       case BOOLEAN:
       case INT8:
       case INT16:
@@ -78,7 +78,7 @@ public class SqliteDialect extends DbDialect {
       case BYTES:
         return "BLOB";
     }
-    return super.getSqlType(schemaName, parameters, type);
+    return super.getSqlType(f);
   }
 
   @Override

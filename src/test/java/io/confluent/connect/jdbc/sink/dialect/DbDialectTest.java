@@ -26,7 +26,6 @@ import org.apache.kafka.connect.errors.ConnectException;
 import org.junit.Test;
 
 import java.math.BigDecimal;
-import java.util.Map;
 
 import io.confluent.connect.jdbc.sink.metadata.SinkRecordField;
 
@@ -36,7 +35,7 @@ public class DbDialectTest {
 
   public static final DbDialect DUMMY_DIALECT = new DbDialect("`", "`") {
     @Override
-    protected String getSqlType(String schemaName, Map<String, String> parameters, Schema.Type type) {
+    protected String getSqlType(SinkRecordField f) {
       return "DUMMY";
     }
   };
@@ -102,35 +101,8 @@ public class DbDialectTest {
   }
 
   @Test
-  public void detectSqlite() {
-    assertEquals(SqliteDialect.class, DbDialect.fromConnectionString("jdbc:sqlite:/folder/db.file").getClass());
-  }
-
-  @Test
-  public void detectOracle() {
-    assertEquals(OracleDialect.class, DbDialect.fromConnectionString("jdbc:oracle:thin:@localhost:1521:xe").getClass());
-  }
-
-  @Test
-  public void detectMysql() {
-    assertEquals(MySqlDialect.class, DbDialect.fromConnectionString("jdbc:mysql://HOST/DATABASE").getClass());
-  }
-
-  @Test
-  public void detectSqlServer() {
-    assertEquals(SqlServerDialect.class, DbDialect.fromConnectionString("jdbc:microsoft:sqlserver://HOST:1433;DatabaseName=DATABASE").getClass());
-    assertEquals(SqlServerDialect.class, DbDialect.fromConnectionString("jdbc:sqlserver://what.amazonaws.com:1433/jdbc_sink_01").getClass());
-    assertEquals(SqlServerDialect.class, DbDialect.fromConnectionString("jdbc:jtds:sqlserver://localhost;instance=SQLEXPRESS;DatabaseName=jdbc_sink_01").getClass());
-  }
-
-  @Test
   public void detectPostgres() {
-    assertEquals(PostgreSqlDialect.class, DbDialect.fromConnectionString("jdbc:postgresql://HOST:1433;DatabaseName=DATABASE").getClass());
-  }
-
-  @Test
-  public void detectGeneric() {
-    assertEquals(GenericDialect.class, DbDialect.fromConnectionString("jdbc:other://host:42").getClass());
+    assertEquals(PostgresDialect.class, DbDialect.fromConnectionString("jdbc:postgresql://HOST:1433;DatabaseName=DATABASE").getClass());
   }
 
 }

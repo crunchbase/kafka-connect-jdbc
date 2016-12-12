@@ -29,24 +29,26 @@ import org.junit.Test;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.sql.Array;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.text.ParseException;
-import java.util.Arrays;
-import java.util.Calendar;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
 import io.confluent.connect.jdbc.sink.metadata.FieldsMetadata;
 import io.confluent.connect.jdbc.sink.metadata.SchemaPair;
-import org.mockito.internal.verification.Times;
+import org.postgresql.core.BaseConnection;
+import org.postgresql.jdbc4.Jdbc4Array;
+
+import javax.sql.rowset.serial.SerialArray;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
-public class PreparedStatementBinderTest {
+public class PreparedStatementInsertBinderTest {
 
   @Test
   public void bindRecord() throws SQLException, ParseException {
@@ -66,8 +68,13 @@ public class PreparedStatementBinderTest {
         .field("time", Time.SCHEMA)
         .field("timestamp", Timestamp.SCHEMA)
         .field("threshold", Schema.OPTIONAL_FLOAT64_SCHEMA)
+        .field("stringArray", SchemaBuilder.array(Schema.STRING_SCHEMA))
+        .field("stringMap", SchemaBuilder.map(Schema.STRING_SCHEMA, Schema.STRING_SCHEMA))
         .build();
 
+
+    Map<String, String> stringMap = new HashMap<>();
+    stringMap.put("foo", "bar");
     Struct valueStruct = new Struct(valueSchema)
         .put("firstName", "Alex")
         .put("lastName", "Smith")
@@ -82,7 +89,9 @@ public class PreparedStatementBinderTest {
         .put("decimal", new BigDecimal("1.5").setScale(0, BigDecimal.ROUND_HALF_EVEN))
         .put("date", new java.util.Date(0))
         .put("time", new java.util.Date(1000))
-        .put("timestamp", new java.util.Date(100));
+        .put("timestamp", new java.util.Date(100))
+        .put("stringArray", Arrays.asList("a", "b", "c"))
+        .put("stringMap", stringMap);
 
     SchemaPair schemaPair = new SchemaPair(null, valueSchema);
 
@@ -90,11 +99,11 @@ public class PreparedStatementBinderTest {
 
     List<String> pkFields = Collections.singletonList("long");
 
-    FieldsMetadata fieldsMetadata = FieldsMetadata.extract("people", pkMode, pkFields, Collections.<String>emptySet(), schemaPair);
+    FieldsMetadata fieldsMetadata = FieldsMetadata.extract("people", pkMode, pkFields, Collections.emptySet(), schemaPair);
 
     PreparedStatement statement = mock(PreparedStatement.class);
 
-    PreparedStatementBinder binder = new PreparedStatementBinder(
+    PreparedStatementInsertBinder binder = new PreparedStatementInsertBinder(
         statement,
         pkMode,
         schemaPair,
@@ -120,10 +129,13 @@ public class PreparedStatementBinderTest {
     verify(statement, times(1)).setDate(index++, new java.sql.Date(((java.util.Date) valueStruct.get("date")).getTime()));
     verify(statement, times(1)).setTime(index++, new java.sql.Time(((java.util.Date) valueStruct.get("time")).getTime()));
     verify(statement, times(1)).setTimestamp(index++, new java.sql.Timestamp(((java.util.Date) valueStruct.get("timestamp")).getTime()));
-    // last field is optional and is null-valued in struct
-    verify(statement, times(1)).setObject(index++, null);
-  }
+    verify(statement, times(1)).setObject(index++, null); // last field is optional and is null-valued in struct
+    // I know {"a","b","c"} looks weird but this is how you specify an "Array" in postgres SQL syntax
+    verify(statement, times(1)).setObject(index++, "{\"a\",\"b\",\"c\"}", Types.OTHER);
+    // This guy on the other hand is straight up jsonb
+    verify(statement, times(1)).setObject(index++, "{\"foo\":\"bar\"}", Types.OTHER);
 
+  }
 
   @Test
   public void bindFieldPrimitiveValues() throws SQLException {
@@ -171,24 +183,12 @@ public class PreparedStatementBinderTest {
   @Test(expected = ConnectException.class)
   public void bindFieldStructUnsupported() throws SQLException {
     Schema structSchema = SchemaBuilder.struct().field("test", Schema.BOOLEAN_SCHEMA).build();
-    PreparedStatementBinder.bindField(mock(PreparedStatement.class), 1, structSchema, new Struct(structSchema));
-  }
-
-  @Test(expected = ConnectException.class)
-  public void bindFieldArrayUnsupported() throws SQLException {
-    Schema arraySchema = SchemaBuilder.array(Schema.INT8_SCHEMA);
-    PreparedStatementBinder.bindField(mock(PreparedStatement.class), 1, arraySchema, Collections.emptyList());
-  }
-
-  @Test(expected = ConnectException.class)
-  public void bindFieldMapUnsupported() throws SQLException {
-    Schema mapSchema = SchemaBuilder.map(Schema.INT8_SCHEMA, Schema.INT8_SCHEMA);
-    PreparedStatementBinder.bindField(mock(PreparedStatement.class), 1, mapSchema, Collections.emptyMap());
+    PreparedStatementInsertBinder.bindField(mock(PreparedStatement.class), 1, structSchema, new Struct(structSchema));
   }
 
   private PreparedStatement verifyBindField(int index, Schema schema, Object value) throws SQLException {
     PreparedStatement statement = mock(PreparedStatement.class);
-    PreparedStatementBinder.bindField(statement, index, schema, value);
+    PreparedStatementInsertBinder.bindField(statement, index, schema, value);
     return verify(statement, times(1));
   }
 

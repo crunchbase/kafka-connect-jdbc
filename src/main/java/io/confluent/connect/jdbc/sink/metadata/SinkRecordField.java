@@ -40,6 +40,10 @@ public class SinkRecordField {
     return schema.parameters();
   }
 
+  public Schema schema() {
+    return schema;
+  }
+
   public Schema.Type schemaType() {
     return schema.type();
   }

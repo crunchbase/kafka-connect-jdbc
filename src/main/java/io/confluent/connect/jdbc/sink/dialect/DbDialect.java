@@ -43,29 +43,23 @@ import static io.confluent.connect.jdbc.sink.dialect.StringBuilderUtil.nCopiesTo
 public abstract class DbDialect {
   private static final TimeZone UTC = TimeZone.getTimeZone("UTC");
 
-  protected static final ThreadLocal<SimpleDateFormat> DATE_FORMAT = new ThreadLocal<SimpleDateFormat>() {
-    protected SimpleDateFormat initialValue() {
-      SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
-      sdf.setTimeZone(UTC);
-      return sdf;
-    }
-  };
+  private static final ThreadLocal<SimpleDateFormat> DATE_FORMAT = ThreadLocal.withInitial(() -> {
+    SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+    sdf.setTimeZone(UTC);
+    return sdf;
+  });
 
-  protected static final ThreadLocal<SimpleDateFormat> TIME_FORMAT = new ThreadLocal<SimpleDateFormat>() {
-    protected SimpleDateFormat initialValue() {
-      SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss.SSS");
-      sdf.setTimeZone(UTC);
-      return sdf;
-    }
-  };
+  private static final ThreadLocal<SimpleDateFormat> TIME_FORMAT = ThreadLocal.withInitial(() -> {
+    SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss.SSS");
+    sdf.setTimeZone(UTC);
+    return sdf;
+  });
 
-  protected static final ThreadLocal<SimpleDateFormat> TIMESTAMP_FORMAT = new ThreadLocal<SimpleDateFormat>() {
-    protected SimpleDateFormat initialValue() {
-      SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
-      sdf.setTimeZone(UTC);
-      return sdf;
-    }
-  };
+  private static final ThreadLocal<SimpleDateFormat> TIMESTAMP_FORMAT = ThreadLocal.withInitial(() -> {
+    SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
+    sdf.setTimeZone(UTC);
+    return sdf;
+  });
 
   private final String escapeStart;
   private final String escapeEnd;
@@ -84,6 +78,10 @@ public abstract class DbDialect {
     nCopiesToBuilder(builder, ",", "?", keyColumns.size() + nonKeyColumns.size());
     builder.append(")");
     return builder.toString();
+  }
+
+  public String getDeleteQuery(final String tableName, final Collection<String> keyColumns, final Collection<String> nonKeyColumns) {
+    throw new UnsupportedOperationException();
   }
 
   public String getUpsertQuery(final String table, final Collection<String> keyColumns, final Collection<String> columns) {
@@ -114,33 +112,27 @@ public abstract class DbDialect {
     final StringBuilder builder = new StringBuilder("ALTER TABLE ");
     builder.append(escaped(tableName));
     builder.append(" ");
-    joinToBuilder(builder, ",", fields, new Transform<SinkRecordField>() {
-      @Override
-      public void apply(StringBuilder builder, SinkRecordField f) {
-        if (newlines) {
-          builder.append(System.lineSeparator());
-        }
-        builder.append("ADD ");
-        writeColumnSpec(builder, f);
+    joinToBuilder(builder, ",", fields, (builder1, f) -> {
+      if (newlines) {
+        builder1.append(System.lineSeparator());
       }
+      builder1.append("ADD ");
+      writeColumnSpec(builder1, f);
     });
     return Collections.singletonList(builder.toString());
   }
 
   protected void writeColumnsSpec(StringBuilder builder, Collection<SinkRecordField> fields) {
-    joinToBuilder(builder, ",", fields, new Transform<SinkRecordField>() {
-      @Override
-      public void apply(StringBuilder builder, SinkRecordField f) {
-        builder.append(System.lineSeparator());
-        writeColumnSpec(builder, f);
-      }
+    joinToBuilder(builder, ",", fields, (builder1, f) -> {
+      builder1.append(System.lineSeparator());
+      writeColumnSpec(builder1, f);
     });
   }
 
   protected void writeColumnSpec(StringBuilder builder, SinkRecordField f) {
     builder.append(escaped(f.name()));
     builder.append(" ");
-    builder.append(getSqlType(f.schemaName(), f.schemaParameters(), f.schemaType()));
+    builder.append(getSqlType(f));
     if (f.defaultValue() != null) {
       builder.append(" DEFAULT ");
       formatColumnValue(builder, f.schemaName(), f.schemaParameters(), f.schemaType(), f.defaultValue());
@@ -186,23 +178,27 @@ public abstract class DbDialect {
         builder.append("'").append(value).append("'");
         break;
       case BYTES:
-        final byte[] bytes;
-        if (value instanceof ByteBuffer) {
-          final ByteBuffer buffer = ((ByteBuffer) value).slice();
-          bytes = new byte[buffer.remaining()];
-          buffer.get(bytes);
-        } else {
-          bytes = (byte[]) value;
-        }
-        builder.append("x'").append(DatatypeConverter.printHexBinary(bytes)).append("'");
+        builder.append("x'").append(DatatypeConverter.printHexBinary(value2Bytes(value))).append("'");
         break;
       default:
         throw new ConnectException("Unsupported type for column value: " + type);
     }
   }
 
-  protected String getSqlType(String schemaName, Map<String, String> parameters, Schema.Type type) {
-    throw new ConnectException(String.format("%s (%s) type doesn't have a mapping to the SQL database column type", schemaName, type));
+  public static byte[] value2Bytes(Object value) {
+    final byte[] bytes;
+    if (value instanceof ByteBuffer) {
+      final ByteBuffer buffer = ((ByteBuffer) value).slice();
+      bytes = new byte[buffer.remaining()];
+      buffer.get(bytes);
+    } else {
+      bytes = (byte[]) value;
+    }
+    return bytes;
+  }
+
+  protected String getSqlType(SinkRecordField f) {
+    throw new ConnectException(String.format("%s (%s) type doesn't have a mapping to the SQL database column type", f.schemaName(), f.schemaType()));
   }
 
   protected String escaped(String identifier) {
@@ -210,21 +206,7 @@ public abstract class DbDialect {
   }
 
   protected Transform<String> escaper() {
-    return new Transform<String>() {
-      @Override
-      public void apply(StringBuilder builder, String identifier) {
-        builder.append(escapeStart).append(identifier).append(escapeEnd);
-      }
-    };
-  }
-
-  protected Transform<String> prefixedEscaper(final String prefix) {
-    return new Transform<String>() {
-      @Override
-      public void apply(StringBuilder builder, String identifier) {
-        builder.append(prefix).append(escapeStart).append(identifier).append(escapeEnd);
-      }
-    };
+    return (builder, identifier) -> builder.append(escapeStart).append(identifier).append(escapeEnd);
   }
 
   static List<String> extractPrimaryKeyFieldNames(Collection<SinkRecordField> fields) {
@@ -247,29 +229,13 @@ public abstract class DbDialect {
       return new SqliteDialect();
     }
 
-    if (url.startsWith("jdbc:oracle:thin:@")) {
-      return new OracleDialect();
-    }
-
-    if (url.startsWith("jdbc:sap")) {
-      // HANA url's are in the format : jdbc:sap://$host:3(instance)(port)/
-      return new HanaDialect();
-    }
-
     final String protocol = extractProtocolFromUrl(url).toLowerCase();
     switch (protocol) {
-      case "microsoft:sqlserver":
-      case "sqlserver":
-      case "jtds:sqlserver":
-        return new SqlServerDialect();
-      case "mariadb":
-      case "mysql":
-        return new MySqlDialect();
       case "postgresql":
-        return new PostgreSqlDialect();
-      default:
-        return new GenericDialect();
+        return new PostgresDialect();
     }
+
+    throw new ConnectException(String.format("Unknown protocol: %s", protocol));
   }
 
   static String extractProtocolFromUrl(final String url) {

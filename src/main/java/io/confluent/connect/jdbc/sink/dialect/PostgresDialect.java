@@ -16,42 +16,51 @@
 
 package io.confluent.connect.jdbc.sink.dialect;
 
+import io.confluent.connect.jdbc.sink.metadata.SinkRecordField;
 import org.apache.kafka.connect.data.Date;
 import org.apache.kafka.connect.data.Decimal;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.Time;
 import org.apache.kafka.connect.data.Timestamp;
+import org.apache.kafka.connect.errors.ConnectException;
 
 import java.util.Collection;
-import java.util.Map;
 
 import static io.confluent.connect.jdbc.sink.dialect.StringBuilderUtil.joinToBuilder;
 import static io.confluent.connect.jdbc.sink.dialect.StringBuilderUtil.nCopiesToBuilder;
 
-public class MySqlDialect extends DbDialect {
+public class PostgresDialect extends DbDialect {
 
-  public MySqlDialect() {
-    super("`", "`");
+  public PostgresDialect() {
+    super("\"", "\"");
   }
 
   @Override
-  protected String getSqlType(String schemaName, Map<String, String> parameters, Schema.Type type) {
-    if (schemaName != null) {
-      switch (schemaName) {
+  protected String getSqlType(SinkRecordField f) {
+    System.out.println(f);
+    if (f.schemaName() != null) {
+      switch (f.schemaName()) {
         case Decimal.LOGICAL_NAME:
-          // Maximum precision supported by MySQL is 65
-          return "DECIMAL(65," + Integer.parseInt(parameters.get(Decimal.SCALE_FIELD)) + ")";
+          return "DECIMAL";
         case Date.LOGICAL_NAME:
           return "DATE";
         case Time.LOGICAL_NAME:
-          return "TIME(3)";
+          return "TIME";
         case Timestamp.LOGICAL_NAME:
-          return "TIMESTAMP(3)";
+          return "TIMESTAMP";
       }
     }
+    switch (f.schemaType()) {
+      case ARRAY:
+        return getSqlType(f.schema().valueSchema().type()) + "[]";
+    }
+    return getSqlType(f.schemaType());
+  }
+
+  protected String getSqlType(Schema.Type type) {
     switch (type) {
       case INT8:
-        return "TINYINT";
+        return "SMALLINT";
       case INT16:
         return "SMALLINT";
       case INT32:
@@ -59,31 +68,45 @@ public class MySqlDialect extends DbDialect {
       case INT64:
         return "BIGINT";
       case FLOAT32:
-        return "FLOAT";
+        return "REAL";
       case FLOAT64:
-        return "DOUBLE";
+        return "DOUBLE PRECISION";
       case BOOLEAN:
-        return "TINYINT";
+        return "BOOLEAN";
       case STRING:
-        return "VARCHAR(256)";
+        return "TEXT";
       case BYTES:
-        return "VARBINARY(1024)";
+        return "BLOB";
+      case MAP:
+        return "JSONB";
     }
-    return super.getSqlType(schemaName, parameters, type);
+    throw new ConnectException(String.format("%s type doesn't have a mapping to the SQL database column type", type));
+  }
+
+  @Override
+  public String getDeleteQuery(final String tableName, final Collection<String> keyColumns, final Collection<String> nonKeyColumns) {
+    StringBuilder builder = new StringBuilder("DELETE FROM ");
+    builder.append(escaped(tableName));
+    builder.append(" WHERE ROW(");
+    joinToBuilder(builder, ",", keyColumns, escaper());
+    builder.append(") IN (ROW(");
+    nCopiesToBuilder(builder, ",", "?", keyColumns.size());
+    builder.append("))");
+    return builder.toString();
   }
 
   @Override
   public String getUpsertQuery(final String table, final Collection<String> keyCols, final Collection<String> cols) {
-    //MySql doesn't support SQL 2003:merge so here how the upsert is handled
-
     final StringBuilder builder = new StringBuilder();
-    builder.append("insert into ");
+    builder.append("INSERT INTO ");
     builder.append(escaped(table));
-    builder.append("(");
+    builder.append(" (");
     joinToBuilder(builder, ",", keyCols, cols, escaper());
-    builder.append(") values(");
+    builder.append(") VALUES (");
     nCopiesToBuilder(builder, ",", "?", cols.size() + keyCols.size());
-    builder.append(") on duplicate key update ");
+    builder.append(") ON CONFLICT (");
+    joinToBuilder(builder, ",", keyCols, escaper());
+    builder.append(") DO UPDATE SET ");
     joinToBuilder(
         builder,
         ",",
@@ -91,7 +114,7 @@ public class MySqlDialect extends DbDialect {
         new StringBuilderUtil.Transform<String>() {
           @Override
           public void apply(StringBuilder builder, String col) {
-            builder.append(escaped(col)).append("=values(").append(escaped(col)).append(")");
+            builder.append(escaped(col)).append("=EXCLUDED.").append(escaped(col));
           }
         }
     );
