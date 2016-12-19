@@ -50,6 +50,10 @@ public class JdbcSinkConfig extends AbstractConfig {
       "__connect_offset"
   );
 
+  public static final String SCHEMA_URL = "schema.registry.url";
+  private static final String SCHEMA_URL_DOC = "Schema Registry URL.";
+  private static final String SCHEMA_URL_DISPLAY = "Schema URL";
+
   public static final String CONNECTION_URL = "connection.url";
   private static final String CONNECTION_URL_DOC = "JDBC connection URL.";
   private static final String CONNECTION_URL_DISPLAY = "JDBC URL";
@@ -145,6 +149,12 @@ public class JdbcSinkConfig extends AbstractConfig {
       + " while this configuration is applicable for the other columns.";
   private static final String FIELDS_WHITELIST_DISPLAY = "Fields Whitelist";
 
+  public static final String CB_RECORDS = "cb.records";
+  private static final String CB_RECORDS_DEFAULT = "false";
+  private static final String CB_RECORDS_DOC =
+      "Special crunchbase-specific key indicating the key will be a uuid+index json pair.";
+  private static final String CB_RECORDS_DISPLAY = "CB Records";
+
   private static final ConfigDef.Range NON_NEGATIVE_INT_VALIDATOR = ConfigDef.Range.atLeast(0);
 
   private static final String CONNECTION_GROUP = "Connection";
@@ -155,6 +165,9 @@ public class JdbcSinkConfig extends AbstractConfig {
 
   public static final ConfigDef CONFIG_DEF = new ConfigDef()
       // Connection
+      .define(SCHEMA_URL, ConfigDef.Type.STRING, null,
+              ConfigDef.Importance.HIGH, SCHEMA_URL_DOC,
+              CONNECTION_GROUP, 1, ConfigDef.Width.LONG, SCHEMA_URL_DISPLAY)
       .define(CONNECTION_URL, ConfigDef.Type.STRING, ConfigDef.NO_DEFAULT_VALUE,
               ConfigDef.Importance.HIGH, CONNECTION_URL_DOC,
               CONNECTION_GROUP, 1, ConfigDef.Width.LONG, CONNECTION_URL_DISPLAY)
@@ -184,6 +197,10 @@ public class JdbcSinkConfig extends AbstractConfig {
       .define(FIELDS_WHITELIST, ConfigDef.Type.LIST, FIELDS_WHITELIST_DEFAULT,
               ConfigDef.Importance.MEDIUM, FIELDS_WHITELIST_DOC,
               DATAMAPPING_GROUP, 4, ConfigDef.Width.LONG, FIELDS_WHITELIST_DISPLAY)
+      // Crunchbase Stuffs
+      .define(CB_RECORDS, ConfigDef.Type.BOOLEAN, CB_RECORDS_DEFAULT,
+              ConfigDef.Importance.MEDIUM, CB_RECORDS_DOC,
+              DATAMAPPING_GROUP, 2, ConfigDef.Width.SHORT, CB_RECORDS_DISPLAY)
       // DDL
       .define(AUTO_CREATE, ConfigDef.Type.BOOLEAN, AUTO_CREATE_DEFAULT,
               ConfigDef.Importance.MEDIUM, AUTO_CREATE_DOC,
@@ -199,6 +216,7 @@ public class JdbcSinkConfig extends AbstractConfig {
               ConfigDef.Importance.MEDIUM, RETRY_BACKOFF_MS_DOC,
               RETRIES_GROUP, 2, ConfigDef.Width.SHORT, RETRY_BACKOFF_MS_DISPLAY);
 
+  public final String schemaUrl;
   public final String connectionUrl;
   public final String connectionUser;
   public final String connectionPassword;
@@ -208,6 +226,7 @@ public class JdbcSinkConfig extends AbstractConfig {
   public final int retryBackoffMs;
   public final boolean autoCreate;
   public final boolean autoEvolve;
+  public final boolean cbRecords;
   public final InsertMode insertMode;
   public final PrimaryKeyMode pkMode;
   public final List<String> pkFields;
@@ -215,6 +234,7 @@ public class JdbcSinkConfig extends AbstractConfig {
 
   public JdbcSinkConfig(Map<?, ?> props) {
     super(CONFIG_DEF, props);
+    schemaUrl = getString(SCHEMA_URL);
     connectionUrl = getString(CONNECTION_URL);
     connectionUser = getString(CONNECTION_USER);
     connectionPassword = getPasswordValue(CONNECTION_PASSWORD);
@@ -224,6 +244,7 @@ public class JdbcSinkConfig extends AbstractConfig {
     retryBackoffMs = getInt(RETRY_BACKOFF_MS);
     autoCreate = getBoolean(AUTO_CREATE);
     autoEvolve = getBoolean(AUTO_EVOLVE);
+    cbRecords = getBoolean(CB_RECORDS);
     insertMode = InsertMode.valueOf(getString(INSERT_MODE).toUpperCase());
     pkMode = PrimaryKeyMode.valueOf(getString(PK_MODE).toUpperCase());
     pkFields = getList(PK_FIELDS);

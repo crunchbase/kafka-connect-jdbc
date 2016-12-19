@@ -16,11 +16,7 @@
 
 package io.confluent.connect.jdbc.sink.dialect;
 
-import org.apache.kafka.connect.data.Date;
-import org.apache.kafka.connect.data.Decimal;
-import org.apache.kafka.connect.data.Schema;
-import org.apache.kafka.connect.data.Time;
-import org.apache.kafka.connect.data.Timestamp;
+import org.apache.kafka.connect.data.*;
 import org.junit.Test;
 
 import java.util.Arrays;
@@ -28,10 +24,10 @@ import java.util.Collections;
 
 import static org.junit.Assert.assertEquals;
 
-public class PostgreSqlDialectTest extends BaseDialectTest {
+public class PostgresDialectTest extends BaseDialectTest {
 
-  public PostgreSqlDialectTest() {
-    super(new PostgreSqlDialect());
+  public PostgresDialectTest() {
+    super(new PostgresDialect());
   }
 
   @Test
@@ -49,6 +45,9 @@ public class PostgreSqlDialectTest extends BaseDialectTest {
     verifyDataTypeMapping("DATE", Date.SCHEMA);
     verifyDataTypeMapping("TIME", Time.SCHEMA);
     verifyDataTypeMapping("TIMESTAMP", Timestamp.SCHEMA);
+    verifyDataTypeMapping("JSONB", SchemaBuilder.map(Schema.STRING_SCHEMA, Schema.STRING_SCHEMA).build());
+    verifyDataTypeMapping("TEXT[]", SchemaBuilder.array(Schema.STRING_SCHEMA).build());
+    verifyDataTypeMapping("INT[]", SchemaBuilder.array(Schema.INT32_SCHEMA).build());
   }
 
   @Test
@@ -99,6 +98,22 @@ public class PostgreSqlDialectTest extends BaseDialectTest {
         "INSERT INTO \"Customer\" (\"id\",\"name\",\"salary\",\"address\") "
         + "VALUES (?,?,?,?) ON CONFLICT (\"id\") DO UPDATE SET \"name\"=EXCLUDED.\"name\",\"salary\"=EXCLUDED.\"salary\",\"address\"=EXCLUDED.\"address\"",
         dialect.getUpsertQuery("Customer", Collections.singletonList("id"), Arrays.asList("name", "salary", "address"))
+    );
+  }
+
+  @Test
+  public void delete() {
+    assertEquals(
+        "DELETE FROM \"Customer\" WHERE ROW(\"id\") IN (ROW(?))",
+        dialect.getDeleteQuery("Customer", Collections.singletonList("id"), Arrays.asList("name", "salary", "address"))
+    );
+  }
+
+  @Test
+  public void deleteTwoPk() {
+    assertEquals(
+        "DELETE FROM \"Customer\" WHERE ROW(\"id\",\"parent_id\") IN (ROW(?,?))",
+        dialect.getDeleteQuery("Customer", Arrays.asList("id", "parent_id"), Arrays.asList("name", "salary", "address"))
     );
   }
 

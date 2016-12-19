@@ -37,7 +37,8 @@ public abstract class BaseDialectTest {
   }
 
   protected void verifyDataTypeMapping(String expected, Schema schema) {
-    assertEquals(expected, dialect.getSqlType(schema.name(), schema.parameters(), schema.type()));
+    SinkRecordField f = new SinkRecordField(schema, "", false);
+    assertEquals(expected, dialect.getSqlType(f));
   }
 
   protected void verifyCreateOneColNoPk(String expected) {

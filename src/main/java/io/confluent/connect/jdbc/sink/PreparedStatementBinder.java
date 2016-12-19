@@ -16,6 +16,8 @@
 
 package io.confluent.connect.jdbc.sink;
 
+import io.confluent.connect.jdbc.sink.metadata.FieldsMetadata;
+import io.confluent.connect.jdbc.sink.metadata.SchemaPair;
 import org.apache.kafka.connect.data.Date;
 import org.apache.kafka.connect.data.Decimal;
 import org.apache.kafka.connect.data.Field;
@@ -24,22 +26,33 @@ import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.data.Time;
 import org.apache.kafka.connect.data.Timestamp;
 import org.apache.kafka.connect.errors.ConnectException;
+import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.sink.SinkRecord;
+import org.apache.kafka.connect.storage.Converter;
 
 import java.math.BigDecimal;
-import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.Types;
+import java.util.Collections;
+import java.util.List;
 
-import io.confluent.connect.jdbc.sink.metadata.FieldsMetadata;
-import io.confluent.connect.jdbc.sink.metadata.SchemaPair;
+import static io.confluent.connect.jdbc.sink.dialect.DbDialect.value2Bytes;
 
-public class PreparedStatementBinder {
+abstract class PreparedStatementBinder {
 
-  private final JdbcSinkConfig.PrimaryKeyMode pkMode;
-  private final PreparedStatement statement;
-  private final SchemaPair schemaPair;
-  private final FieldsMetadata fieldsMetadata;
+  protected final JdbcSinkConfig.PrimaryKeyMode pkMode;
+  protected final PreparedStatement statement;
+  protected final SchemaPair schemaPair;
+  protected final FieldsMetadata fieldsMetadata;
+
+  private static final Converter JSON_CONVERTER;
+
+  static {
+    JSON_CONVERTER = new JsonConverter();
+    JSON_CONVERTER.configure(Collections.singletonMap("schemas.enable", "false"), false);
+  }
 
   public PreparedStatementBinder(
       PreparedStatement statement,
@@ -53,13 +66,9 @@ public class PreparedStatementBinder {
     this.fieldsMetadata = fieldsMetadata;
   }
 
-  public void bindRecord(SinkRecord record) throws SQLException {
-    final Struct valueStruct = (Struct) record.value();
+  abstract public void bindRecord(SinkRecord record) throws SQLException;
 
-    // Assumption: the relevant SQL has placeholders for keyFieldNames first followed by nonKeyFieldNames, in iteration order
-
-    int index = 1;
-
+  protected int bindKey(SinkRecord record, int index) throws SQLException {
     switch (pkMode) {
       case NONE:
         if (!fieldsMetadata.keyFieldNames.isEmpty()) {
@@ -96,16 +105,10 @@ public class PreparedStatementBinder {
       }
       break;
     }
-
-    for (final String fieldName : fieldsMetadata.nonKeyFieldNames) {
-      final Field field = record.valueSchema().field(fieldName);
-      bindField(index++, field.schema(), valueStruct.get(field));
-    }
-
-    statement.addBatch();
+    return index;
   }
 
-  void bindField(int index, Schema schema, Object value) throws SQLException {
+  protected void bindField(int index, Schema schema, Object value) throws SQLException {
     bindField(statement, index, schema, value);
   }
 
@@ -140,16 +143,14 @@ public class PreparedStatementBinder {
           case STRING:
             statement.setString(index, (String) value);
             break;
+          case ARRAY:
+            statement.setObject(index, getArrayValue(schema, value), Types.OTHER);
+            break;
+          case MAP:
+            statement.setObject(index, getJsonValue(schema, value), Types.OTHER);
+            break;
           case BYTES:
-            final byte[] bytes;
-            if (value instanceof ByteBuffer) {
-              final ByteBuffer buffer = ((ByteBuffer) value).slice();
-              bytes = new byte[buffer.remaining()];
-              buffer.get(bytes);
-            } else {
-              bytes = (byte[]) value;
-            }
-            statement.setBytes(index, bytes);
+            statement.setBytes(index, value2Bytes(value));
             break;
           default:
             throw new ConnectException("Unsupported source data type: " + schema.type());
@@ -158,7 +159,7 @@ public class PreparedStatementBinder {
     }
   }
 
-  static boolean maybeBindLogical(PreparedStatement statement, int index, Schema schema, Object value) throws SQLException {
+  private static boolean maybeBindLogical(PreparedStatement statement, int index, Schema schema, Object value) throws SQLException {
     if (schema.name() != null) {
       switch (schema.name()) {
         case Date.LOGICAL_NAME:
@@ -178,6 +179,36 @@ public class PreparedStatementBinder {
       }
     }
     return false;
+  }
+
+  private static String getArrayValue(Schema schema, Object value) {
+    StringBuilder sb = new StringBuilder("{\"");
+    List values = ((List) value);
+    for (int i = 0; i < values.size(); i++) {
+      switch (schema.valueSchema().type()) {
+        case MAP:
+          sb.append(escape(getJsonValue(schema.valueSchema(), values.get(i))));
+          break;
+        default:
+          sb.append(values.get(i));
+          break;
+      }
+      if (i < values.size() - 1) {
+        sb.append("\",\"");
+      }
+    }
+    sb.append("\"}");
+
+    return sb.toString();
+  }
+
+  private static String escape(String string) {
+    return string.replace("\\", "\\\\").replace("\"", "\\\"");
+  }
+
+  private static String getJsonValue(Schema schema, Object value) {
+    byte[] arrayBytes = JSON_CONVERTER.fromConnectData(null, schema, value);
+    return new String(arrayBytes, StandardCharsets.UTF_8);
   }
 
 }

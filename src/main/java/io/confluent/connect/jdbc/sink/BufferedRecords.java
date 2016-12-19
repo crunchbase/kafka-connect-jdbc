@@ -16,6 +16,11 @@
 
 package io.confluent.connect.jdbc.sink;
 
+import io.confluent.connect.jdbc.sink.JdbcSinkConfig.InsertMode;
+import io.confluent.connect.jdbc.sink.JdbcSinkConfig.PrimaryKeyMode;
+import io.confluent.connect.jdbc.sink.dialect.DbDialect;
+import io.confluent.connect.jdbc.sink.metadata.FieldsMetadata;
+import io.confluent.connect.jdbc.sink.metadata.SchemaPair;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.slf4j.Logger;
@@ -28,10 +33,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import io.confluent.connect.jdbc.sink.dialect.DbDialect;
-import io.confluent.connect.jdbc.sink.metadata.FieldsMetadata;
-import io.confluent.connect.jdbc.sink.metadata.SchemaPair;
-
 public class BufferedRecords {
   private static final Logger log = LoggerFactory.getLogger(BufferedRecords.class);
 
@@ -41,11 +42,13 @@ public class BufferedRecords {
   private final DbStructure dbStructure;
   private final Connection connection;
 
-  private List<SinkRecord> records = new ArrayList<>();
+  private BufferedRecordProvider records;
   private SchemaPair currentSchemaPair;
   private FieldsMetadata fieldsMetadata;
-  private PreparedStatement preparedStatement;
-  private PreparedStatementBinder preparedStatementBinder;
+  private PreparedStatement preparedStatementInsert;
+  private PreparedStatement preparedStatementDelete;
+  private PreparedStatementBinder preparedStatementInsertBinder;
+  private PreparedStatementBinder preparedStatementDeleteBinder;
 
   public BufferedRecords(JdbcSinkConfig config, String tableName, DbDialect dbDialect, DbStructure dbStructure, Connection connection) {
     this.tableName = tableName;
@@ -53,6 +56,11 @@ public class BufferedRecords {
     this.dbDialect = dbDialect;
     this.dbStructure = dbStructure;
     this.connection = connection;
+    if (config.pkMode == PrimaryKeyMode.RECORD_KEY && config.insertMode == InsertMode.UPSERT) {
+      records = new BufferedRecordKeyedProvider();
+    } else {
+      records = new BufferedRecordKeylessProvider();
+    }
   }
 
   public List<SinkRecord> add(SinkRecord record) throws SQLException {
@@ -63,10 +71,18 @@ public class BufferedRecords {
       // re-initialize everything that depends on the record schema
       fieldsMetadata = FieldsMetadata.extract(tableName, config.pkMode, config.pkFields, config.fieldsWhitelist, currentSchemaPair);
       dbStructure.createOrAmendIfNecessary(config, connection, tableName, fieldsMetadata);
+
       final String insertSql = getInsertSql();
       log.debug("{} sql: {}", config.insertMode, insertSql);
-      preparedStatement = connection.prepareStatement(insertSql);
-      preparedStatementBinder = new PreparedStatementBinder(preparedStatement, config.pkMode, schemaPair, fieldsMetadata);
+      preparedStatementInsert = connection.prepareStatement(insertSql);
+      preparedStatementInsertBinder = new PreparedStatementInsertBinder(preparedStatementInsert, config.pkMode, schemaPair, fieldsMetadata);
+
+      if (config.cbRecords) {
+        final String deleteSql = getDeleteSql();
+        log.debug("DELETE sql: {}", deleteSql);
+        preparedStatementDelete = connection.prepareStatement(deleteSql);
+        preparedStatementDeleteBinder = new PreparedStatementDeleteBinder(preparedStatementDelete, config.pkMode, schemaPair, fieldsMetadata);
+      }
     }
 
     final List<SinkRecord> flushed;
@@ -91,26 +107,40 @@ public class BufferedRecords {
     if (records.isEmpty()) {
       return new ArrayList<>();
     }
-    for (SinkRecord record : records) {
-      preparedStatementBinder.bindRecord(record);
-    }
-    int totalUpdateCount = 0;
-    for (int updateCount : preparedStatement.executeBatch()) {
-      totalUpdateCount += updateCount;
-    }
-    if (totalUpdateCount != records.size()) {
-      switch (config.insertMode) {
-        case INSERT:
-          throw new ConnectException(String.format("Update count (%d) did not sum up to total number of records inserted (%d)",
-                                                   totalUpdateCount, records.size()));
-        case UPSERT:
-          log.trace("Upserted records:{} resulting in in totalUpdateCount:{}", records.size(), totalUpdateCount);
+    try {
+      for (SinkRecord record : records) {
+        if (record.value() == null) {
+          preparedStatementDeleteBinder.bindRecord(record);
+        } else {
+          preparedStatementInsertBinder.bindRecord(record);
+        }
       }
-    }
+      int totalUpdateCount = 0;
+      if (preparedStatementDelete != null) {
+        for (int updateCount : preparedStatementDelete.executeBatch()) {
+          totalUpdateCount += updateCount;
+        }
+      }
+      if (preparedStatementInsert != null) {
+        for (int updateCount : preparedStatementInsert.executeBatch()) {
+          totalUpdateCount += updateCount;
+        }
+      }
+      if (totalUpdateCount != records.size()) {
+        switch (config.insertMode) {
+          case INSERT:
+            throw new ConnectException(String.format("Update count (%d) did not sum up to total number of records inserted (%d)",
+                totalUpdateCount, records.size()));
+          case UPSERT:
+            log.trace("Upserted records:{} resulting in in totalUpdateCount:{}", records.size(), totalUpdateCount);
+        }
+      }
 
-    final List<SinkRecord> flushedRecords = records;
-    records = new ArrayList<>();
-    return flushedRecords;
+      return records.reset();
+    } catch (SQLException e) {
+      log.error("getNextException", e.getNextException());
+      throw e;
+    }
   }
 
   private String getInsertSql() {
@@ -128,4 +158,9 @@ public class BufferedRecords {
         throw new ConnectException("Invalid insert mode");
     }
   }
+
+  private String getDeleteSql() {
+    return dbDialect.getDeleteQuery(tableName, fieldsMetadata.keyFieldNames, fieldsMetadata.nonKeyFieldNames);
+  }
+
 }

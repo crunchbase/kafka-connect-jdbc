@@ -16,6 +16,10 @@
 
 package io.confluent.connect.jdbc.sink;
 
+import io.confluent.connect.jdbc.sink.crunchbase.CbSinkRecord;
+import io.confluent.connect.jdbc.sink.crunchbase.CbSinkRecordFactory;
+import io.confluent.connect.jdbc.sink.dialect.DbDialect;
+import io.confluent.connect.jdbc.util.CachedConnectionProvider;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkRecord;
 
@@ -25,20 +29,22 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
-import io.confluent.connect.jdbc.sink.dialect.DbDialect;
-import io.confluent.connect.jdbc.util.CachedConnectionProvider;
-
 public class JdbcDbWriter {
 
   private final JdbcSinkConfig config;
   private final DbDialect dbDialect;
   private final DbStructure dbStructure;
+  private CbSinkRecordFactory cbSinkRecordFactory;
   final CachedConnectionProvider cachedConnectionProvider;
 
   JdbcDbWriter(final JdbcSinkConfig config, DbDialect dbDialect, DbStructure dbStructure) {
     this.config = config;
     this.dbDialect = dbDialect;
     this.dbStructure = dbStructure;
+
+    if (config.cbRecords) {
+      this.cbSinkRecordFactory = new CbSinkRecordFactory(config.schemaUrl);
+    }
 
     this.cachedConnectionProvider = new CachedConnectionProvider(config.connectionUrl, config.connectionUser, config.connectionPassword) {
       @Override
@@ -53,13 +59,23 @@ public class JdbcDbWriter {
 
     final Map<String, BufferedRecords> bufferByTable = new HashMap<>();
     for (SinkRecord record : records) {
-      final String table = destinationTable(record.topic());
-      BufferedRecords buffer = bufferByTable.get(table);
-      if (buffer == null) {
-        buffer = new BufferedRecords(config, table, dbDialect, dbStructure, connection);
-        bufferByTable.put(table, buffer);
+      final String table;
+      if (config.cbRecords) {
+        /*
+         * SPECIAL CRUNCHBASE-SPECIFIC JSON KEY CONSISTING OF A UUID+INDEX PAIR THAT OVERRIDES THE STANDARD CONNECTOR LOGIC
+         */
+        final CbSinkRecord cbRecord = cbSinkRecordFactory.build(record);
+        table = cbRecord.table;
+        record = cbRecord.record;
+      } else {
+        /*
+         * STANDARD CONNECTOR LOGIC
+         */
+        table = destinationTable(record.topic());
       }
-      buffer.add(record);
+      bufferByTable
+          .computeIfAbsent(table, x -> new BufferedRecords(config, table, dbDialect, dbStructure, connection))
+          .add(record);
     }
     for (BufferedRecords buffer : bufferByTable.values()) {
       buffer.flush();
@@ -71,7 +87,7 @@ public class JdbcDbWriter {
     cachedConnectionProvider.closeQuietly();
   }
 
-  String destinationTable(String topic) {
+  private String destinationTable(String topic) {
     final String tableName = config.tableNameFormat.replace("${topic}", topic);
     if (tableName.isEmpty()) {
       throw new ConnectException(String.format("Destination table name for topic '%s' is empty using the format string '%s'", topic, config.tableNameFormat));
