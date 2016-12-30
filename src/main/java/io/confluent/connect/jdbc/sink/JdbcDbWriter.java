@@ -59,23 +59,29 @@ public class JdbcDbWriter {
 
     final Map<String, BufferedRecords> bufferByTable = new HashMap<>();
     for (SinkRecord record : records) {
-      final String table;
-      if (config.cbRecords) {
-        /*
-         * SPECIAL CRUNCHBASE-SPECIFIC JSON KEY CONSISTING OF A UUID+INDEX PAIR THAT OVERRIDES THE STANDARD CONNECTOR LOGIC
-         */
-        final CbSinkRecord cbRecord = cbSinkRecordFactory.build(record);
-        table = cbRecord.table;
-        record = cbRecord.record;
-      } else {
-        /*
-         * STANDARD CONNECTOR LOGIC
-         */
-        table = destinationTable(record.topic());
+      try {
+        final String table;
+        if (config.cbRecords) {
+          /*
+           * SPECIAL CRUNCHBASE-SPECIFIC JSON KEY CONSISTING OF A UUID+INDEX PAIR THAT OVERRIDES THE STANDARD CONNECTOR LOGIC
+           */
+          final CbSinkRecord cbRecord = cbSinkRecordFactory.build(record);
+          table = cbRecord.table;
+          record = cbRecord.record;
+        } else {
+          /*
+           * STANDARD CONNECTOR LOGIC
+           */
+          table = destinationTable(record.topic());
+        }
+        bufferByTable
+            .computeIfAbsent(table, x -> new BufferedRecords(config, table, dbDialect, dbStructure, connection))
+            .add(record);
+      } catch (Exception e) {
+        // TODO remove this once we properly use metadata to encode json
+        System.out.println("skipping record due to exception: " + record);
+        e.printStackTrace();
       }
-      bufferByTable
-          .computeIfAbsent(table, x -> new BufferedRecords(config, table, dbDialect, dbStructure, connection))
-          .add(record);
     }
     for (BufferedRecords buffer : bufferByTable.values()) {
       buffer.flush();

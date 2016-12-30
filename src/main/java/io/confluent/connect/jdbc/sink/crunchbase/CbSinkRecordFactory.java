@@ -33,9 +33,14 @@ import org.apache.kafka.connect.storage.Converter;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * Everything in this class is embarrassing and I am ashamed to have written it.
+ */
 public class CbSinkRecordFactory {
 
   private final Converter jsonConverter;
@@ -56,39 +61,52 @@ public class CbSinkRecordFactory {
 
   public CbSinkRecord build(SinkRecord record) {
     final Map keyJson = getKeyJson(record);
-    final String table = (record.topic() + "_" + keyJson.get("table").toString()).toLowerCase();
-    final Schema keySchema = getSchema(table + "-key");
-    final Schema valueSchema = getSchema(table + "-value");
-    final Struct key;
-    final Struct value;
+    final String table = keyJson.get("table").toString().toLowerCase();
+    final String subject = record.topic() + "_" + table;
+    final Schema keySchema = getSchema(subject + "-key");
+    final Schema valueSchema = getSchema(subject + "-value");
+    final Struct recordKey;
+    final Struct recordValue;
 
     if (record.key() != null) {
-      key = new Struct(keySchema);
+      recordKey = new Struct(keySchema);
       keySchema.fields().forEach(f -> {
         Object v = ((Map) record.key()).get(f.name());
-        key.put(f.name(), v);
+        recordKey.put(f.name(), v);
       });
     } else {
-      key = null;
+      recordKey = null;
     }
 
     if (record.value() != null) {
-      value = new Struct(valueSchema);
-      valueSchema.fields().forEach(f -> {
-        Object v = ((Map) record.value()).get(f.name());
-        value.put(f.name(), v);
+      recordValue = new Struct(valueSchema);
+      valueSchema.fields().forEach(field -> {
+        Object value = ((Map) record.value()).get(field.name());
+        try {
+          if (value != null) {
+            if (isStruct(field.schema(), value)) {
+              value = getStruct(field.schema(), value);
+            } else if (isStructArray(field.schema(), value)) {
+              value = getStructArray(field.schema().valueSchema(), value);
+            }
+            recordValue.put(field.name(), value);
+          }
+        } catch (RuntimeException e) {
+          System.out.println("failed on table " + table + ", field: " + field.name() + ", value: " + value);
+          throw e;
+        }
       });
     } else {
-      value = null;
+      recordValue = null;
     }
 
     SinkRecord newRecord = new SinkRecord(
         record.topic(),
         record.kafkaPartition(),
         keySchema,
-        key,
+        recordKey,
         valueSchema,
-        value,
+        recordValue,
         record.kafkaOffset(),
         record.timestamp(),
         record.timestampType()
@@ -108,6 +126,7 @@ public class CbSinkRecordFactory {
       }
       return schema;
     } catch (IOException | RestClientException e) {
+      System.out.println("failed to get schema for: " + subject);
       throw new RuntimeException(e);
     }
   }
@@ -120,6 +139,46 @@ public class CbSinkRecordFactory {
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
+  }
+
+  private boolean isStruct(Schema schema, Object value) {
+    return value != null && schema.type() == Schema.Type.STRUCT;
+  }
+
+  private boolean isStructArray(Schema schema, Object value) {
+    return value != null &&
+        schema.type() == Schema.Type.ARRAY &&
+        schema.valueSchema().type() == Schema.Type.STRUCT;
+  }
+
+  private Struct getStruct(Schema schema, Object value) {
+    Struct s = new Struct(schema);
+    ((HashMap) value).forEach((k, v2) -> {
+      try {
+        if (v2 != null) {
+          String field = k.toString();
+          Schema fieldSchema = schema.field(field).schema();
+          if (isStruct(fieldSchema, v2)) {
+            v2 = getStruct(fieldSchema, v2);
+          } else if (isStructArray(fieldSchema, v2)) {
+            v2 = getStructArray(fieldSchema.valueSchema(), value);
+          }
+          s.put(field, v2);
+        }
+      } catch (RuntimeException e) {
+        System.out.println("SPECIFICALLY failed on v2: " + v2 + ", class: " + v2.getClass() + ", from value: " + value);
+        throw e;
+      }
+    });
+    return s;
+  }
+
+  private ArrayList getStructArray(Schema schema, Object value) {
+    ArrayList a = (ArrayList) value;
+    for (int i = 0; i < a.size(); i++) {
+      a.set(i, getStruct(schema, a.get(i)));
+    }
+    return a;
   }
 
 }

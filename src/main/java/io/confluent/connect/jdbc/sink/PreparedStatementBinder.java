@@ -149,6 +149,9 @@ abstract class PreparedStatementBinder {
           case MAP:
             statement.setObject(index, getJsonValue(schema, value), Types.OTHER);
             break;
+          case STRUCT:
+            statement.setObject(index, getJsonValue(schema, value), Types.OTHER);
+            break;
           case BYTES:
             statement.setBytes(index, value2Bytes(value));
             break;
@@ -182,11 +185,16 @@ abstract class PreparedStatementBinder {
   }
 
   private static String getArrayValue(Schema schema, Object value) {
-    StringBuilder sb = new StringBuilder("{\"");
     List values = ((List) value);
+    if (values.size() == 0) {
+      return "{}";
+    }
+
+    StringBuilder sb = new StringBuilder("{\"");
     for (int i = 0; i < values.size(); i++) {
       switch (schema.valueSchema().type()) {
         case MAP:
+        case STRUCT:
           sb.append(escape(getJsonValue(schema.valueSchema(), values.get(i))));
           break;
         default:

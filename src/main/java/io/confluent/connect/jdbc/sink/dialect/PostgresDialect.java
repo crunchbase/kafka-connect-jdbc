@@ -79,6 +79,8 @@ public class PostgresDialect extends DbDialect {
         return "BLOB";
       case MAP:
         return "JSONB";
+      case STRUCT:
+        return "JSONB";
     }
     throw new ConnectException(String.format("%s type doesn't have a mapping to the SQL database column type", type));
   }
