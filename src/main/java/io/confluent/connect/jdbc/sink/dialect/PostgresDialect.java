@@ -23,6 +23,8 @@ import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.Time;
 import org.apache.kafka.connect.data.Timestamp;
 import org.apache.kafka.connect.errors.ConnectException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
 
@@ -30,6 +32,7 @@ import static io.confluent.connect.jdbc.sink.dialect.StringBuilderUtil.joinToBui
 import static io.confluent.connect.jdbc.sink.dialect.StringBuilderUtil.nCopiesToBuilder;
 
 public class PostgresDialect extends DbDialect {
+  private static final Logger log = LoggerFactory.getLogger(PostgresDialect.class);
 
   public PostgresDialect() {
     super("\"", "\"");
@@ -37,7 +40,8 @@ public class PostgresDialect extends DbDialect {
 
   @Override
   protected String getSqlType(SinkRecordField f) {
-    System.out.println(f);
+    log.info("getSqlType: field: {}", f);
+    log.info("getSqlType: schema: {}", f.schemaName());
     if (f.schemaName() != null) {
       switch (f.schemaName()) {
         case Decimal.LOGICAL_NAME:
@@ -53,6 +57,10 @@ public class PostgresDialect extends DbDialect {
     switch (f.schemaType()) {
       case ARRAY:
         return getSqlType(f.schema().valueSchema().type()) + "[]";
+    }
+    // TODO there has to be a better way than requiring uuid in the field name! (same in PreparedStatementBinder.bindField)
+    if (f.name().contains("uuid")) {
+      return "UUID";
     }
     return getSqlType(f.schemaType());
   }

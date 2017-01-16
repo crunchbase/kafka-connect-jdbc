@@ -16,8 +16,6 @@
 
 package io.confluent.connect.jdbc.sink;
 
-import io.confluent.connect.jdbc.sink.crunchbase.CbSinkRecord;
-import io.confluent.connect.jdbc.sink.crunchbase.CbSinkRecordFactory;
 import io.confluent.connect.jdbc.sink.dialect.DbDialect;
 import io.confluent.connect.jdbc.util.CachedConnectionProvider;
 import org.apache.kafka.connect.errors.ConnectException;
@@ -28,23 +26,24 @@ import java.sql.SQLException;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class JdbcDbWriter {
 
   private final JdbcSinkConfig config;
   private final DbDialect dbDialect;
   private final DbStructure dbStructure;
-  private CbSinkRecordFactory cbSinkRecordFactory;
   final CachedConnectionProvider cachedConnectionProvider;
+
+  // table names get too long for postgres with the fully qualified $run-$type-$table topic name
+  // so we use this regex to strip off the common prefix, expecting we are dumping into a run-specific pg schema
+  private final Pattern tablePattern = Pattern.compile("[a-z_\\-0-9]*emissions_database_([a-z_0-9.]*)");
 
   JdbcDbWriter(final JdbcSinkConfig config, DbDialect dbDialect, DbStructure dbStructure) {
     this.config = config;
     this.dbDialect = dbDialect;
     this.dbStructure = dbStructure;
-
-    if (config.cbRecords) {
-      this.cbSinkRecordFactory = new CbSinkRecordFactory(config.schemaUrl);
-    }
 
     this.cachedConnectionProvider = new CachedConnectionProvider(config.connectionUrl, config.connectionUser, config.connectionPassword) {
       @Override
@@ -61,17 +60,11 @@ public class JdbcDbWriter {
     for (SinkRecord record : records) {
       try {
         final String table;
-        if (config.cbRecords) {
-          /*
-           * SPECIAL CRUNCHBASE-SPECIFIC JSON KEY CONSISTING OF A UUID+INDEX PAIR THAT OVERRIDES THE STANDARD CONNECTOR LOGIC
-           */
-          final CbSinkRecord cbRecord = cbSinkRecordFactory.build(record);
-          table = cbRecord.table;
-          record = cbRecord.record;
+        // if the topic doesn't match up with the crunchbase prefix, proceed as normal using the full topic name
+        Matcher tableMatcher = tablePattern.matcher(record.topic());
+        if (tableMatcher.find()) {
+          table = destinationTable(tableMatcher.group(1));
         } else {
-          /*
-           * STANDARD CONNECTOR LOGIC
-           */
           table = destinationTable(record.topic());
         }
         bufferByTable

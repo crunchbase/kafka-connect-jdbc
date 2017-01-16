@@ -78,20 +78,21 @@ abstract class PreparedStatementBinder {
 
       case KAFKA: {
         assert fieldsMetadata.keyFieldNames.size() == 3;
-        bindField(index++, Schema.STRING_SCHEMA, record.topic());
-        bindField(index++, Schema.INT32_SCHEMA, record.kafkaPartition());
-        bindField(index++, Schema.INT64_SCHEMA, record.kafkaOffset());
+        bindField(index++, null, Schema.STRING_SCHEMA, record.topic());
+        bindField(index++, null, Schema.INT32_SCHEMA, record.kafkaPartition());
+        bindField(index++, null, Schema.INT64_SCHEMA, record.kafkaOffset());
       }
       break;
 
       case RECORD_KEY: {
         if (schemaPair.keySchema.type().isPrimitive()) {
           assert fieldsMetadata.keyFieldNames.size() == 1;
-          bindField(index++, schemaPair.keySchema, record.key());
+          String fieldName = fieldsMetadata.keyFieldNames.toArray()[0].toString();
+          bindField(index++, fieldName, schemaPair.keySchema, record.key());
         } else {
           for (String fieldName : fieldsMetadata.keyFieldNames) {
             final Field field = schemaPair.keySchema.field(fieldName);
-            bindField(index++, field.schema(), ((Struct) record.key()).get(field));
+            bindField(index++, fieldName, field.schema(), ((Struct) record.key()).get(field));
           }
         }
       }
@@ -100,7 +101,7 @@ abstract class PreparedStatementBinder {
       case RECORD_VALUE: {
         for (String fieldName : fieldsMetadata.keyFieldNames) {
           final Field field = schemaPair.valueSchema.field(fieldName);
-          bindField(index++, field.schema(), ((Struct) record.value()).get(field));
+          bindField(index++, fieldName, field.schema(), ((Struct) record.value()).get(field));
         }
       }
       break;
@@ -108,8 +109,13 @@ abstract class PreparedStatementBinder {
     return index;
   }
 
-  protected void bindField(int index, Schema schema, Object value) throws SQLException {
-    bindField(statement, index, schema, value);
+  protected void bindField(int index, String fieldName, Schema schema, Object value) throws SQLException {
+    // TODO there has to be a better way than requiring uuid in the field name! (same in ProgresDialect.getSqlType)
+    if (fieldName != null && fieldName.contains("uuid")) {
+      statement.setObject(index, value, Types.OTHER);
+    } else {
+      bindField(statement, index, schema, value);
+    }
   }
 
   static void bindField(PreparedStatement statement, int index, Schema schema, Object value) throws SQLException {
@@ -147,8 +153,6 @@ abstract class PreparedStatementBinder {
             statement.setObject(index, getArrayValue(schema, value), Types.OTHER);
             break;
           case MAP:
-            statement.setObject(index, getJsonValue(schema, value), Types.OTHER);
-            break;
           case STRUCT:
             statement.setObject(index, getJsonValue(schema, value), Types.OTHER);
             break;

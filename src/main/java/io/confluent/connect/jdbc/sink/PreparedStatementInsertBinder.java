@@ -37,7 +37,7 @@ public class PreparedStatementInsertBinder extends PreparedStatementBinder {
     final Struct valueStruct = (Struct) record.value();
     for (final String fieldName : fieldsMetadata.nonKeyFieldNames) {
       final Field field = record.valueSchema().field(fieldName);
-      bindField(index++, field.schema(), valueStruct.get(field));
+      bindField(index++, fieldName, field.schema(), valueStruct.get(field));
     }
     statement.addBatch();
   }
