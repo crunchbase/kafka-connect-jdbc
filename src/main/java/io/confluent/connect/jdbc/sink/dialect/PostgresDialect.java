@@ -59,7 +59,7 @@ public class PostgresDialect extends DbDialect {
         return getSqlType(f.schema().valueSchema().type()) + "[]";
     }
     // TODO there has to be a better way than requiring uuid in the field name! (same in PreparedStatementBinder.bindField)
-    if (f.name().contains("uuid")) {
+    if (f.name().contains("uuid") && f.schemaType() == Schema.Type.STRING) {
       return "UUID";
     }
     return getSqlType(f.schemaType());

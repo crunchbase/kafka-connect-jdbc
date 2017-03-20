@@ -111,7 +111,7 @@ abstract class PreparedStatementBinder {
 
   protected void bindField(int index, String fieldName, Schema schema, Object value) throws SQLException {
     // TODO there has to be a better way than requiring uuid in the field name! (same in ProgresDialect.getSqlType)
-    if (fieldName != null && fieldName.contains("uuid")) {
+    if (fieldName != null && fieldName.contains("uuid") && schema.type() == Schema.Type.STRING) {
       statement.setObject(index, value, Types.OTHER);
     } else {
       bindField(statement, index, schema, value);
