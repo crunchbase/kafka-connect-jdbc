@@ -202,7 +202,7 @@ abstract class PreparedStatementBinder {
           sb.append(escape(getJsonValue(schema.valueSchema(), values.get(i))));
           break;
         default:
-          sb.append(values.get(i));
+          sb.append(escape(values.get(i).toString()));
           break;
       }
       if (i < values.size() - 1) {
